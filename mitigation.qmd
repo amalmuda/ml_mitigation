@@ -2,7 +2,7 @@
 title: "Algoritme for å identifisere avtaler relatert til utslippsreduksjon"
 author: "Einar Tornes"
 format: html
-editor: visual
+editor: source
 execute: 
   echo: true
   warning: false
@@ -14,6 +14,9 @@ execute:
 
 library(tidyverse)
 library(tidymodels)
+library(stopwords)
+library(tidytext)
+library(stringr)
 library(noradstats)
 library(here)
 library(janitor)
@@ -50,23 +53,56 @@ About ten percent of all agreement observations in the data are registered with 
 Shifting focus to disbursed amounts, about 11 percent of disbursed amounts are to agreements with climate change mitigation as a main objective, and 3 percent to agreements with significant objective. 86 percent of disbursements are to agreements without such an objective.
 
 ```{r}
-#| label: explore-data
+#| label: explore-mitigation
 
+# Summarising number of observations and amounts targeting mitigation
 tbl_count <- df_oda |> 
   group_by(pm_climate_change_mitigation) |> 
-  summarise(count = n()) |> 
-  mutate(pst = count / sum(count)) |> 
+  summarise(
+    n = n(),
+    amount_nok_mill = sum(disbursed_mill_nok)) |>
+  mutate(
+    n_pst = n / sum(n),
+    amount_pst = amount_nok_mill / sum(amount_nok_mill)) |> 
   ungroup()
 
 knitr::kable(tbl_count)
 
-tbl_amount <- df_oda |> 
-  group_by(pm_climate_change_mitigation) |> 
-  summarise(nok_mill = sum(disbursed_mill_nok)) |>
-  mutate(pst = nok_mill / sum(nok_mill)) |> 
-  ungroup()
+```
 
-knitr::kable(tbl_amount)
+Let's have a look at the most frequently used words in title and description of agreements with and without mitigation objective. "redd", "climate", "energy", "forest" and "sustainable" are among the most frequently used words in agreements targeting mitigation.
+
+```{r explore-text}
+
+# Making a binary variable "mitigation" and character variable "title_desc"
+df_oda <- df_oda |>
+  mutate(mitigation = if_else(pm_climate_change_mitigation == "None", "Not mitigation", "Mitigation")) |> 
+  mutate(title_desc = paste0(agreement_title, ". ", description_of_agreement))
+
+# Facet plot of frequently used words
+df_oda |> 
+  unnest_tokens(word, title_desc) |>
+  anti_join(get_stopwords()) |> 
+  count(mitigation, word, sort = TRUE) |>
+  group_by(mitigation) |> 
+  slice_max(n, n = 15) |> 
+  ungroup() |> 
+  mutate(word = reorder_within(word, n, mitigation)) |> 
+  
+  ggplot(aes(n, word, fill = mitigation)) +
+  geom_col(show.legend = FALSE) +
+  scale_y_reordered() +
+  facet_wrap(~mitigation, scales = "free") +
+  labs(x = "Word frequency",
+       y = NULL) +
+  theme_minimal()
+
+```
+
+
+## Build a model
+
+```{r}
 
 ```
 
