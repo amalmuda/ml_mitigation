@@ -1,0 +1,72 @@
+---
+title: "Algoritme for å identifisere avtaler relatert til utslippsreduksjon"
+author: "Einar Tornes"
+format: html
+editor: visual
+execute: 
+  echo: true
+  warning: false
+  error: false
+---
+
+```{r}
+#| label: load-packages
+
+library(tidyverse)
+library(tidymodels)
+library(noradstats)
+library(here)
+library(janitor)
+library(knitr)
+
+```
+
+Let's build a model for identifying ODA agreements targeting the mitigation of climate change.
+
+## Load data
+
+Importing ten years of Statsys data.
+
+```{r}
+#| label: load-data
+
+# Load statsys data for the ten last years
+df_statsys <- noradstats::read_aiddata(here("data", "statsys_ten.csv")) |> 
+  janitor::clean_names()
+
+# Exclude non-ODA agreements, exclude the frame agreement level and chose years. Sorting levels.
+df_oda <- df_statsys |> 
+  filter(type_of_flow == "ODA",
+         type_of_agreement != "Rammeavtale",
+         year %in% c(2013:2017)) |> 
+  mutate(pm_climate_change_mitigation = fct_relevel(pm_climate_change_mitigation, "None", after = Inf))
+
+```
+
+## Explore data
+
+About ten percent of all agreement observations in the data are registered with the climate change adaptation marker as a main objective or significant objective. The rest is registered withouth such objectives.
+
+Shifting focus to disbursed amounts, about 11 percent of disbursed amounts are to agreements with climate change mitigation as a main objective, and 3 percent to agreements with significant objective. 86 percent of disbursements are to agreements without such an objective.
+
+```{r}
+#| label: explore-data
+
+tbl_count <- df_oda |> 
+  group_by(pm_climate_change_mitigation) |> 
+  summarise(count = n()) |> 
+  mutate(pst = count / sum(count)) |> 
+  ungroup()
+
+knitr::kable(tbl_count)
+
+tbl_amount <- df_oda |> 
+  group_by(pm_climate_change_mitigation) |> 
+  summarise(nok_mill = sum(disbursed_mill_nok)) |>
+  mutate(pst = nok_mill / sum(nok_mill)) |> 
+  ungroup()
+
+knitr::kable(tbl_amount)
+
+```
+
