@@ -1,7 +1,9 @@
 ---
 title: "Algoritme for å identifisere avtaler relatert til utslippsreduksjon"
 author: "Einar Tornes"
-format: html
+format:
+  html:
+    code-fold: true
 editor: source
 execute: 
   echo: true
@@ -17,6 +19,11 @@ library(tidymodels)
 library(stopwords)
 library(tidytext)
 library(stringr)
+library(textrecipes)
+library(themis)
+library(LiblineaR)
+library(ranger)
+library(doParallel)
 library(noradstats)
 library(here)
 library(janitor)
@@ -99,10 +106,181 @@ df_oda |>
 
 ```
 
-
 ## Build a model
 
-```{r}
+We select the two relevant columns: the output variable mitigation and the predictor variable title_desc. To prevent data leakage from training to test data we include only unique observations before splitting data. There are many non-unique observations as agreements are multi-year (and sometimes have multiple observations the same year, especially statsys data).
+
+```{r train-test}
+
+df_oda <- df_oda |> 
+  distinct(agreement_number, .keep_all = TRUE) |> 
+  select(mitigation, title_desc)
+
+# Data budget
+set.seed(123)
+
+oda_split <- df_oda |> 
+  initial_split(strata = mitigation)
+
+
+oda_train <- training(oda_split)
+oda_test <- testing(oda_split)
+  
+set.seed(234)
+
+oda_folds <- vfold_cv(oda_train, strata = mitigation)
+
+oda_folds
 
 ```
 
+Let's set up our recipe for preprocessing
+
+```{r recipe-and-model}
+
+# Preprocessing recipe. Steps for fature engineering
+
+oda_rec <- recipe(mitigation ~ title_desc,
+                  data = oda_train) |> 
+  step_tokenize(title_desc) |> 
+  step_stopwords(title_desc) |> 
+  step_tokenfilter(title_desc, max_tokens = 1e3) |> 
+  step_tfidf(title_desc) |> 
+  step_normalize(all_numeric_predictors()) |> 
+  step_smote(mitigation)
+
+# These are the steps
+oda_rec
+
+
+# To actually do the steps we would prep(). To see what happens, bake() the recipe. There are 1001 variables. These are TF-IDF variables.
+# prep(oda_rec) |> bake(new_data = NULL)
+# We do not need to prep() and bake() because that happens under the hood below.
+```
+
+Let's create a model specification for each model we want to try.
+
+```{r model-specification}
+
+# Model spesification
+
+rf_spec <- rand_forest(mtry = 10, trees = 300) |> 
+  set_mode("classification") |> 
+  set_engine("ranger")
+
+rf_spec
+
+svm_spec <- svm_linear() |>
+  set_mode("classification") |>
+  set_engine("LiblineaR")
+
+svm_spec
+```
+
+Let's build a model workflow where we combine the data preprocessing and the model specification.
+
+```{r workflow}
+# Model workflow
+
+rf_wf <- workflow() |> 
+  add_recipe(oda_rec) |> 
+  add_model(rf_spec)
+
+rf_wf
+
+svm_wf <- workflow() |>
+  add_recipe(oda_rec) |>
+  add_model(svm_spec)
+
+svm_wf
+```
+
+```{r results}
+
+doParallel::registerDoParallel()
+
+set.seed(123)
+rf_res <- fit_resamples(
+  rf_wf,
+  oda_folds,
+  metrics = metric_set(accuracy, recall, precision),
+  control = control_resamples(save_pred = TRUE)
+)
+
+set.seed(123)
+svm_res <- fit_resamples(
+  svm_wf,
+  oda_folds,
+  metrics = metric_set(accuracy, recall, precision),
+  control = control_resamples(save_pred = TRUE)
+)
+```
+
+How did the model(s) perform? Resampling results (evaluation). We can visualize these results using a confusion matrix.
+
+```{r}
+collect_metrics(rf_res)
+
+rf_res |> 
+  conf_mat_resampled(tidy = FALSE) |> 
+  autoplot()
+
+```
+
+## Fit and evaluate final model
+
+The function last_fit() fits one finale time on the entire training data (not only the single subsamples) and evaluates on the testing data. This is the first time we have used the testing data.
+
+```{r}
+
+final_res <- last_fit(
+  rf_wf,
+  split = oda_split,
+  metrics = metric_set(accuracy, recall, precision)
+)
+
+collect_metrics(final_res) # Metrics evaluated on the testing data. No sign of overfitting.
+
+collect_predictions(final_res) |> 
+  conf_mat(mitigation, .pred_class) |> 
+  autoplot()
+
+```
+
+The object final_res contains a fitted workflow that we can use for prediction.
+
+```{r extract-workflow}
+
+# Extract final fitted workflow used to train the algoritm
+final_workflow <- extract_workflow(final_res)
+
+# Predict on testing data
+augment(final_workflow, new_data = oda_test[1,])
+
+# predict(final_workflow, oda_test[1,])
+
+```
+
+You can save this fitted `final_wf()` object to use later with new data, for example with `readr::write_rds()`.
+
+```{r save fitted workflow}
+readr::write_rds(final_workflow, "final_workflow.rds")
+
+```
+
+## Deploy model
+
+```{r}
+library(vetiver)
+
+v <- vetiver_model(final_fitted, "Climate change mitigation")
+
+v
+
+library(plumber)
+
+pr() |> 
+  vetiver_api(v) |> 
+  pr_run()
+
+```
