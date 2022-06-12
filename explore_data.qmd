@@ -1,0 +1,69 @@
+---
+title: "Explore data on Climate change mitigation"
+format: html
+editor: visual
+---
+
+## Load data
+
+Importing ten years of Statsys data.
+
+```{r}
+#| label: load-data
+
+df_oda <- read_csv(here("data", "Norad-Norwegian_development_assistance.csv"))
+
+df_oda <- df_oda |> 
+  filter(year %in% c(2013:2017))
+```
+
+## Explore data
+
+About ten percent of all agreement observations in the data are registered with the climate change adaptation marker as a main objective or significant objective. The rest is registered withouth such objectives.
+
+Shifting focus to disbursed amounts, about 11 percent of disbursed amounts are to agreements with climate change mitigation as a main objective, and 3 percent to agreements with significant objective. 86 percent of disbursements are to agreements without such an objective.
+
+```{r}
+#| label: explore-mitigation
+#| eval: false
+
+# # Summarising number of observations and amounts targeting mitigation
+# tbl_count <- df_oda |> 
+#   group_by(policy_marker_climate_change_mitigation) |> 
+#   summarise(
+#     n = n(),
+#     amount_nok_mill = sum(disbursements_1000_nok / 1000)) |>
+#   mutate(
+#     n_prop = n / sum(n),
+#     amount_prop = amount_nok_mill / sum(amount_nok_mill)) |> 
+#   ungroup()
+# 
+# knitr::kable(tbl_count)
+
+```
+
+Let's have a look at the most frequently used words in title and description of agreements with and without mitigation objective. "redd", "climate", "energy", "forest" and "sustainable" are among the most frequently used words in agreements targeting mitigation.
+
+```{r explore-text}
+
+# Making a binary variable "mitigation" and character variable "title_desc"
+# Facet plot of frequently used words
+p <- df_oda |>
+  mutate(mitigation = if_else(policy_marker_climate_change_mitigation == 0, "Not mitigation", "Mitigation")) |> 
+  mutate(title_desc = paste0(agreement_title, ". ", description_of_agreement)) |> 
+  unnest_tokens(word, title_desc) |>
+  anti_join(get_stopwords()) |>
+  count(mitigation, word, sort = TRUE) |>
+  group_by(mitigation) |>
+  slice_max(n, n = 15) |>
+  ungroup() |>
+  mutate(word = reorder_within(word, n, mitigation)) |>
+  ggplot(aes(n, word, fill = mitigation)) +
+  geom_col(show.legend = FALSE) +
+  scale_y_reordered() +
+  facet_wrap(~mitigation, scales = "free") +
+  labs(x = "Word frequency",
+       y = NULL) +
+  theme_minimal()
+
+```

@@ -1,0 +1,291 @@
+---
+title: "Model to identify agreements targeting Climate change mitigation"
+author: "Einar Tornes"
+format:
+  html:
+    code-fold: true
+editor: source
+execute: 
+  echo: true
+  warning: false
+  error: false
+  enabled: false
+---
+
+```{r}
+#| label: load-packages
+#| include: false
+library(tidyverse)
+library(tidymodels)
+library(stopwords)
+library(tidytext)
+library(stringr)
+library(textrecipes)
+library(themis)
+library(LiblineaR)
+library(ranger)
+library(doParallel)
+library(noradstats)
+library(here)
+library(janitor)
+library(knitr)
+
+```
+
+Let's build a model for identifying ODA agreements targeting the mitigation of climate change.
+
+## Build a model
+
+The basic observation unit in the dataset are the individual agreements, identified by the unique agreement_number. Agreements can multi-year and also be financed from multiple budget lines. Therefore the basic observation unit is: agreement-by-budgetpost-by-year. An agreement can therefor be registrered multiple times in the dataset, if it is a multi-year agreement and/or the agreements is financed over multiple budget lines the same year.
+
+
+**Unique agreement observations to avoid data leakage**
+
+We want to avoid data leakage when training the model, meaning that we want to keep the training data separate from the testing data. However, this also means that we should only include unique agreement observations in the training/testing data. If not, statistical information for a multi-year agreement could be in included in both the tran set and the test set and then overestimate the models performance. The testing data would then not be really *new* data. We therefore include only one observation for each agreement in the training/testing data. For the time period 2013-2017 the total observations are X. However, when we only include unique agreement_numbers the number of unique agreement observations are redused to X.
+
+To train the model we want to include, identified by tha variable *agreement_number*. 
+
+**Initial data transformation: outcome variable and predictors**
+
+- We create a dichotomous outcome variable *mitigation* based on the existing variable *policy_marker_climate_change_mitigation*. The levels *2 (main objective)* and *1 (significant objective)* are collapsed to one level *Mitigation*.
+- We create a character variable containg the text information from two variables, *agreement_title* and *description_of_agreement* The character strings are collapsed into one.
+- We exclude non-english characters from all character variables. This is to avoid errors using special non-english characters, like spanish letters for excample in the variable *agreement_partner*.
+- We keep most of the variables in the dataset to be used as predictors in the model. We exclude all policy markers as these are often quality checked at the same time.
+
+```{r data}
+
+df_oda <- df_oda |> 
+  distinct(agreement_number, .keep_all = TRUE) |> 
+  mutate(mitigation = if_else(policy_marker_climate_change_mitigation == 0, "Not mitigation", "Mitigation")) |> 
+  mutate(title_desc = paste0(agreement_title, ". ", description_of_agreement)) |> 
+  mutate(across(where(is.character), ~str_replace_all(., pattern = "[^[\\da-zA-Z ]]", " "))) |> 
+  select(c(mitigation,
+           title_desc,
+           agreement_partner,
+           group_of_agreement_partner,
+           implementing_partner,
+           main_sector,
+           sub_sector,
+           target_area,
+           recipient_country,
+           recipient_region,
+           type_of_assistance,
+           extending_agency,
+           budget_post_chapter,
+           budget_post_post
+           )
+         )
+
+```
+
+**Data budget: splitting data to training set and testing set**
+
+- The data split into traing set and testing set is stratified by outcome variable *mitigation*, to keep the same proportion of the levels in the *mitigation* varaible in both set seed.
+- Resampling the training data into (ten) folds to use cross-validation.
+
+```{r train-test}
+# Data budget
+set.seed(1)
+
+oda_split <- df_oda |> 
+  initial_split(strata = mitigation)
+
+
+oda_train <- training(oda_split)
+oda_test <- testing(oda_split)
+  
+set.seed(1)
+
+oda_folds <- vfold_cv(oda_train, strata = mitigation)
+```
+
+**Recipe for preprocessing**
+
+Let's set up our recipe for preprocessing. We use the `textrecipes` package for preprocessing and feature engineering for text.
+
+Preprocessing of the variable *title_desc*.
+- We do a ordinary tokenization, splitting words by space.
+- We remove stopwords to eliminate words that are so commonly used that they carry very little useful information, like *a*, *the* and *is*.
+- We dont want to keep all the tokens, but keep the top 1000 tokens used tokens.
+- We calculate TF-IDF (frequency-inverse document frequency) for each token (word). TF-IDF is a weight to measure the importance of a token in the document and corpus (collection of documents).
+
+We normalize all the numeric predictors as this is required in some models.
+
+We transform all the nominal predictors to factors by creating dummy variables. Also we specify that unseen factor levels will be assign with a new value. Also we deal with missing (unknown) data, and we remove factor levels with zero variance.
+
+Handling class imbalance. Subsampling a training set, either undersampling or oversampling the appropriate class or classes, can be a helpful approach to dealing with classification data where one or more classes occur very infrequently. In such a situation (without compensating for it), most models will overfit the majority class and produce very good statistics for the class containing the frequently occuring classes while the minority classes have poor performance. We over-sample the minority class *Mitigation* in the outcome variable *mitigation* using the method Synthetic Minority Over-sampling Technique (SMOTE).
+
+
+
+```{r recipe-and-model}
+
+# Preprocessing recipe. Steps for fature engineering
+oda_rec <- recipe(mitigation ~ ., data = oda_train) |>
+  step_tokenize(title_desc) |>
+  step_stopwords(title_desc) |>
+  step_tokenfilter(title_desc, max_tokens = 1e3) |>
+  step_tfidf(title_desc) |>
+  step_normalize(all_numeric_predictors()) |>
+  # step_string2factor(all_nominal()) |> 
+  step_novel(all_nominal_predictors()) |>
+  step_unknown(all_nominal_predictors()) |>
+  step_dummy(all_nominal_predictors()) |>
+  step_zv(all_predictors()) |>
+  step_smote(mitigation)
+
+#glimpse(oda_train)
+
+# These are the steps
+# oda_rec
+
+# To actually do the steps we would prep(). To see what happens, bake() the recipe. There are 1001 variables. These are TF-IDF variables. We do not need to prep() and bake() because that happens under the hood below.
+# 
+
+df_train_baked <- prep(oda_rec) |> bake(new_data = NULL)
+
+#glimpse(prep)
+
+```
+
+Let's create a model specification for each model we want to try.
+
+```{r model-specification}
+
+# Model spesification
+
+rf_spec <- rand_forest(trees = 500) |> 
+  set_mode("classification") |> 
+  set_engine("ranger")
+
+# rf_spec
+
+# svm_spec <- svm_linear() |>
+#   set_mode("classification") |>
+#   set_engine("LiblineaR")
+
+# svm_spec
+```
+
+Let's build a model workflow where we combine the data preprocessing and the model specification.
+
+```{r workflow}
+# Model workflow
+
+rf_wf <- workflow() |> 
+  add_recipe(oda_rec) |> 
+  add_model(rf_spec)
+
+# rf_wf
+
+# svm_wf <- workflow() |>
+#   add_recipe(oda_rec) |>
+#   add_model(svm_spec)
+
+# svm_wf
+
+# , blueprint = hardhat::default_recipe_blueprint(allow_novel_levels = TRUE)
+```
+
+```{r results}
+start_time <- Sys.time()
+
+doParallel::registerDoParallel()
+
+set.seed(1)
+rf_res <- fit_resamples(
+  rf_wf,
+  oda_folds,
+  metrics = metric_set(accuracy, recall, precision, roc_auc, sens, spec),
+  control = control_resamples(save_pred = TRUE)
+)
+
+# set.seed(123)
+# svm_res <- fit_resamples(
+#   svm_wf,
+#   oda_folds,
+#   metrics = metric_set(accuracy, recall, precision),
+#   control = control_resamples(save_pred = TRUE)
+# )
+
+end_time <- Sys.time()
+
+time <- end_time - start_time
+
+```
+
+How did the model(s) perform? Resampling results (evaluation). We can visualize these results using a confusion matrix.
+
+```{r}
+rf_res_metrics <- collect_metrics(rf_res)
+
+rf_res_truefalse <- rf_res |> 
+  conf_mat_resampled(tidy = FALSE)
+
+rf_res_autoplot <- rf_res |> 
+  conf_mat_resampled(tidy = FALSE) |> 
+  autoplot()
+
+#knitr::kable(rf_res_metrics)
+
+```
+
+## Fit model and evaluate final model
+
+The function last_fit() fits one finale time on the entire training data one time instead of ten times in the resamples of the training set. And evaluating only on the testing data. And keep the metrics. This is the first time we have used the testing data.
+
+
+
+```{r}
+
+# final_res <- last_fit(
+#   rf_wf,
+#   split = oda_split,
+#   metrics = metric_set(accuracy, recall, precision, roc_auc, sens, spec)
+# )
+# 
+# collect_metrics(final_res) # Metrics evaluated on the testing data. No sign of overfitting.
+# 
+# final_res_autoplot <- collect_predictions(final_res) |> 
+#   conf_mat(mitigation, .pred_class) |> 
+#   autoplot()
+
+```
+
+The object final_res contains a fitted workflow that we can use for prediction.
+
+```{r extract-workflow}
+
+
+# Extract final fitted workflow used to train the algoritm
+#final_workflow <- extract_workflow(final_res)
+
+# Predict on testing data
+#augment(final_workflow, new_data = oda_test[1,])
+
+```
+
+You can save this fitted `final_wf()` object to use later with new data, for example with `readr::write_rds()`.
+
+```{r save fitted workflow}
+
+#readr::write_rds(final_workflow, "final_workflow11062020.rds")
+
+```
+
+## Deploy model
+
+```{r}
+
+# library(vetiver)
+# 
+# v <- vetiver_model(final_fitted, "Climate change mitigation")
+# 
+# v
+# 
+# library(plumber)
+# 
+# pr() |> 
+#   vetiver_api(v) |> 
+#   pr_run()
+
+```
