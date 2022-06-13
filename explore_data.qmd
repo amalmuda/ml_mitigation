@@ -1,15 +1,29 @@
 ---
-title: "Explore data on Climate change mitigation"
-format: html
-editor: visual
+title: "Explore ODA agreements targeting climate change mitigation"
+format:
+  html:
+    code-fold: true
+editor: source
+execute: 
+  echo: true
+  warning: false
+  error: false
 ---
 
-## Load data
+## Load packages and data
 
-Importing ten years of Statsys data.
+Lets start by loading the packages used in this document.
+
+Norwegian development aid statistics from 1960 onwards are available to download from [Access to microdata](https://resultater.norad.no/microdata). Select the the last ten years (2011-2021). You can also automatically download a csv file with microdata for the ten years 2011-2022 using [this link](https://resultater.norad.no/api/microdata?from_year=2011&to_year=2021&main_region_code=&country_iso_code=&agreement_partner_group_sid=&agreement_partner_sid=&target_area_code=&dac_main_sector_code=&dac_sub_sector_code=&chapter_code=&format=csv&language=en). Save the csv file in the *data* folder in the project directory and the file should be named *Norad-Norwegian_development_assistance*.
+
+Let's import the csv file and only keep data for the years 2013-2018.
 
 ```{r}
-#| label: load-data
+#| label: packages-data
+
+library(tidyverse)
+library(here)
+library(tidytext)
 
 df_oda <- read_csv(here("data", "Norad-Norwegian_development_assistance.csv"))
 
@@ -48,7 +62,7 @@ Let's have a look at the most frequently used words in title and description of 
 
 # Making a binary variable "mitigation" and character variable "title_desc"
 # Facet plot of frequently used words
-p <- df_oda |>
+df_oda |>
   mutate(mitigation = if_else(policy_marker_climate_change_mitigation == 0, "Not mitigation", "Mitigation")) |> 
   mutate(title_desc = paste0(agreement_title, ". ", description_of_agreement)) |> 
   unnest_tokens(word, title_desc) |>

@@ -1,6 +1,6 @@
 ---
-title: "Model to identify agreements targeting Climate change mitigation"
-author: "Einar Tornes"
+title: "A model to identify ODA agreements targeting climate change mitigation"
+author: "Norad - Seksjon for Statistics and analysis"
 format:
   html:
     code-fold: true
@@ -12,9 +12,15 @@ execute:
   enabled: false
 ---
 
+Let's build a model to identify ODA agreements targeting targeting climate change mitigation.
+
+## Load packages and data
+
+Lets start by loading the packages used in this document.
+
 ```{r}
 #| label: load-packages
-#| include: false
+
 library(tidyverse)
 library(tidymodels)
 library(stopwords)
@@ -32,7 +38,18 @@ library(knitr)
 
 ```
 
-Let's build a model for identifying ODA agreements targeting the mitigation of climate change.
+Norwegian development aid statistics from 1960 onwards are available to download from [Access to microdata](https://resultater.norad.no/microdata). Select the the last ten years (2011-2021). You can also automatically download a csv file with microdata for the ten years 2011-2022 using [this link](https://resultater.norad.no/api/microdata?from_year=2011&to_year=2021&main_region_code=&country_iso_code=&agreement_partner_group_sid=&agreement_partner_sid=&target_area_code=&dac_main_sector_code=&dac_sub_sector_code=&chapter_code=&format=csv&language=en). Save the csv file in the *data* folder in the project directory and the file should be named *Norad-Norwegian_development_assistance*.
+
+Let's import the csv file and only keep data for the years 2013-2018.
+
+```{r}
+#| label: load-data
+
+df_oda <- read_csv(here("data", "Norad-Norwegian_development_assistance.csv"))
+
+df_oda <- df_oda |> 
+  filter(year %in% c(2013:2017))
+```
 
 ## Build a model
 
@@ -52,7 +69,8 @@ To train the model we want to include, identified by tha variable *agreement_num
 - We exclude non-english characters from all character variables. This is to avoid errors using special non-english characters, like spanish letters for excample in the variable *agreement_partner*.
 - We keep most of the variables in the dataset to be used as predictors in the model. We exclude all policy markers as these are often quality checked at the same time.
 
-```{r data}
+```{r}
+#| label: data-wrangling
 
 df_oda <- df_oda |> 
   distinct(agreement_number, .keep_all = TRUE) |> 
@@ -78,15 +96,15 @@ df_oda <- df_oda |>
 
 ```
 
-**Data budget: splitting data to training set and testing set**
+## Spending our data budget
 
-- The data split into traing set and testing set is stratified by outcome variable *mitigation*, to keep the same proportion of the levels in the *mitigation* varaible in both set seed.
-- Resampling the training data into (ten) folds to use cross-validation.
+- The data split into traing set and testing set. The split is stratified on the *mitigation* variable. This ensures that our training and test data sets will keep roughly the same proportions of *mitigation* and *not relevant* agreements as in the original data.
+- We create a set of 10 cross-validation resampling folds of the trainind data to evaluate the model. For each of the ten folds the model will train and evaluate.
 
-```{r train-test}
-# Data budget
+```{r}
+#| label: data-budget
+
 set.seed(1)
-
 oda_split <- df_oda |> 
   initial_split(strata = mitigation)
 
@@ -95,29 +113,34 @@ oda_train <- training(oda_split)
 oda_test <- testing(oda_split)
   
 set.seed(1)
-
 oda_folds <- vfold_cv(oda_train, strata = mitigation)
+
+#oda_folds
+
 ```
 
-**Recipe for preprocessing**
+## Recipe for preprocessing
 
-Let's set up our recipe for preprocessing. We use the `textrecipes` package for preprocessing and feature engineering for text.
+Let's set up our recipe for preprocessing.
 
-Preprocessing of the variable *title_desc*.
-- We do a ordinary tokenization, splitting words by space.
+- First, we specify the model. The *mitigation* as outcome and all other variables are predictors. We also specify the training data.
+
+Preprocessing steps for the predictor variable *title_desc*:
+
+- We tokenize the title_desc variable using ordinary tokenization by splitting words by space. This creates a dummy variable for each token in the variable and count the presence of each token in each "document" (title_desc).
 - We remove stopwords to eliminate words that are so commonly used that they carry very little useful information, like *a*, *the* and *is*.
-- We dont want to keep all the tokens, but keep the top 1000 tokens used tokens.
-- We calculate TF-IDF (frequency-inverse document frequency) for each token (word). TF-IDF is a weight to measure the importance of a token in the document and corpus (collection of documents).
+- We dont want to keep all the tokens, but keep the top 1000 used tokens.
+- We want to weight the token (word) counts by using TF-IDF (Text Frequency-Inverse Document Frequency) for each token. TF-IDF is a weight to measure the importance of a token in the document and corpus (collection of documents).
 
-We normalize all the numeric predictors as this is required in some models.
+Other preprocessing steps:
 
-We transform all the nominal predictors to factors by creating dummy variables. Also we specify that unseen factor levels will be assign with a new value. Also we deal with missing (unknown) data, and we remove factor levels with zero variance.
+- We normalize all the numeric predictors as this is required in some models.
+- We convert all factor or character variables to binary numeric variables (dummy variables).
+- We transform all the nominal predictors to factors by creating dummy variables. Also we specify that unseen factor levels will be assign with a new value. Also we deal with missing (unknown) data, and we remove factor levels with zero variance.
+- We handle the class imbalance in the outcome variable by using oversampling. Oversampling and undersampling can be helpful to deal with such class imbalanse to avoid poorly perfonmanse on the minority class. We oversample the "mitigation" level in the *mitigation* variable using the method *Synthetic Minority Over-sampling Technique (SMOTE)*.
 
-Handling class imbalance. Subsampling a training set, either undersampling or oversampling the appropriate class or classes, can be a helpful approach to dealing with classification data where one or more classes occur very infrequently. In such a situation (without compensating for it), most models will overfit the majority class and produce very good statistics for the class containing the frequently occuring classes while the minority classes have poor performance. We over-sample the minority class *Mitigation* in the outcome variable *mitigation* using the method Synthetic Minority Over-sampling Technique (SMOTE).
-
-
-
-```{r recipe-and-model}
+```{r}
+#| label: recipe
 
 # Preprocessing recipe. Steps for fature engineering
 oda_rec <- recipe(mitigation ~ ., data = oda_train) |>
@@ -138,20 +161,22 @@ oda_rec <- recipe(mitigation ~ ., data = oda_train) |>
 # These are the steps
 # oda_rec
 
-# To actually do the steps we would prep(). To see what happens, bake() the recipe. There are 1001 variables. These are TF-IDF variables. We do not need to prep() and bake() because that happens under the hood below.
-# 
+```
+
+Let's have a look at the training data after these preprocessing steps. The `recipe()` defines the preprocessing, the `prep()` calculates statistics from the training set, and `bake()` applies the preprocessing to data sets. These preprocessing steps are applied under the hood in the model, but it's useful to have a look to at the preprocessing.
+
+```{r}
+#| label: baked
 
 df_train_baked <- prep(oda_rec) |> bake(new_data = NULL)
 
-#glimpse(prep)
-
+#glimpse(df_train_baked)
 ```
 
-Let's create a model specification for each model we want to try.
+Let's create a model specification for the model(s) we want to try. We are specifying a random forest model (500 trees) and a linear support vector machines (SVM) model. 
 
-```{r model-specification}
-
-# Model spesification
+```{r}
+#| label: model-specs
 
 rf_spec <- rand_forest(trees = 500) |> 
   set_mode("classification") |> 
@@ -166,10 +191,12 @@ rf_spec <- rand_forest(trees = 500) |>
 # svm_spec
 ```
 
-Let's build a model workflow where we combine the data preprocessing and the model specification.
+## Model workflow
 
-```{r workflow}
-# Model workflow
+We build a model workflow where we put both the data recipe for preprocessing and the model specification.
+
+```{r}
+#| label: model-workflow
 
 rf_wf <- workflow() |> 
   add_recipe(oda_rec) |> 
@@ -182,11 +209,15 @@ rf_wf <- workflow() |>
 #   add_model(svm_spec)
 
 # svm_wf
-
-# , blueprint = hardhat::default_recipe_blueprint(allow_novel_levels = TRUE)
 ```
 
-```{r results}
+## Fit a model
+
+We fit the model workflow (preprocessing and model) on the training set (using resampling).
+
+```{r}
+#| label: resampling-results
+
 start_time <- Sys.time()
 
 doParallel::registerDoParallel()
@@ -199,7 +230,7 @@ rf_res <- fit_resamples(
   control = control_resamples(save_pred = TRUE)
 )
 
-# set.seed(123)
+# set.seed(1)
 # svm_res <- fit_resamples(
 #   svm_wf,
 #   oda_folds,
@@ -213,29 +244,31 @@ time <- end_time - start_time
 
 ```
 
-How did the model(s) perform? Resampling results (evaluation). We can visualize these results using a confusion matrix.
+## Evaluate performance
+
+How did the model perform? Let's have a look at the resampling performance metrics. We can visualize these results using a confusion matrix.
 
 ```{r}
+#| label: resampling-metrics
+
 rf_res_metrics <- collect_metrics(rf_res)
 
 rf_res_truefalse <- rf_res |> 
   conf_mat_resampled(tidy = FALSE)
 
-rf_res_autoplot <- rf_res |> 
-  conf_mat_resampled(tidy = FALSE) |> 
+rf_res_autoplot <- rf_res_truefalse |> 
   autoplot()
 
 #knitr::kable(rf_res_metrics)
 
 ```
 
-## Fit model and evaluate final model
+## Finalizing our model
 
-The function last_fit() fits one finale time on the entire training data one time instead of ten times in the resamples of the training set. And evaluating only on the testing data. And keep the metrics. This is the first time we have used the testing data.
-
-
+Finally, let’s make a final workflow, and then fit and evaluate the model one last time. We use the function `last_fit()` to fit the final model on the full training data set and evaluates the finalized model on the testing data set. We just need to give this funtion our original train/test data split. This is the first time we have used the testing data. The purpose of the testing data is to estimate the model performance we expect to see with new data.
 
 ```{r}
+#| label: final-model
 
 # final_res <- last_fit(
 #   rf_wf,
@@ -251,10 +284,14 @@ The function last_fit() fits one finale time on the entire training data one tim
 
 ```
 
-The object final_res contains a fitted workflow that we can use for prediction.
+The performance metrics from the test set indicate that we did not overfit during the training procedure.
 
-```{r extract-workflow}
+## Make predictions using the workflow
 
+The final_res object contains a finalized, fitted **workflow** that can be used for predicting on new data. We can extract this object.
+
+```{r}
+#| label: extract-workflow
 
 # Extract final fitted workflow used to train the algoritm
 #final_workflow <- extract_workflow(final_res)
@@ -264,7 +301,7 @@ The object final_res contains a fitted workflow that we can use for prediction.
 
 ```
 
-You can save this fitted `final_wf()` object to use later with new data, for example with `readr::write_rds()`.
+We can save this fitted `final_wf()` object to use later with new data.
 
 ```{r save fitted workflow}
 
@@ -272,9 +309,10 @@ You can save this fitted `final_wf()` object to use later with new data, for exa
 
 ```
 
-## Deploy model
+## Deploy model workflow
 
 ```{r}
+#| label: deploy
 
 # library(vetiver)
 # 
