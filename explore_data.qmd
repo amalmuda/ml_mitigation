@@ -1,5 +1,5 @@
 ---
-title: "Explore ODA agreements targeting climate change mitigation"
+title: "Exploring text data in development aid agreements targeting climate change mitigation"
 format:
   html:
     code-fold: true
@@ -12,11 +12,9 @@ execute:
 
 ## Load packages and data
 
-Lets start by loading the packages used in this document.
+Norwegian development aid statistics (microdata) is publicly available to download [aidresults.no/microdata](https://resultater.norad.no/microdata). We select last five years (2013-2017). These data can also be downloaded by using [this link](https://resultater.norad.no/api/microdata?from_year=2011&to_year=2017&main_region_code=&country_iso_code=&agreement_partner_group_sid=&agreement_partner_sid=&target_area_code=&dac_main_sector_code=&dac_sub_sector_code=&chapter_code=&format=csv&language=en). The csv file is saved in the the *data* folder in the project directory and named *Norad-Norwegian_development_assistance.csv*.
 
-Norwegian development aid statistics from 1960 onwards are available to download from [Access to microdata](https://resultater.norad.no/microdata). Select the the last ten years (2011-2021). You can also automatically download a csv file with microdata for the ten years 2011-2022 using [this link](https://resultater.norad.no/api/microdata?from_year=2011&to_year=2021&main_region_code=&country_iso_code=&agreement_partner_group_sid=&agreement_partner_sid=&target_area_code=&dac_main_sector_code=&dac_sub_sector_code=&chapter_code=&format=csv&language=en). Save the csv file in the *data* folder in the project directory and the file should be named *Norad-Norwegian_development_assistance*.
-
-Let's import the csv file and only keep data for the years 2013-2018.
+Let's import the csv file. We use the data for the years 2013-2017.
 
 ```{r}
 #| label: packages-data
