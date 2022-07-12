@@ -1,5 +1,5 @@
 ---
-title: "A model to identify development aid agreements targetning climate change mitigation"
+title: "A model to identify development aid agreements targeting climate change mitigation"
 author: "Norad - Section for statistics and analysis"
 format:
   html:
@@ -12,7 +12,7 @@ execute:
   enabled: false
 ---
 
-We build a model to identify development agreements supporting developing countries in reducing greenhouse gas emmisions. The model is built using supervised machine learning.
+We build a model to identify development agreements supporting developing countries in reducing greenhouse gas emissions. The model is built using supervised machine learning.
 
 ## Load packages and data
 
@@ -93,10 +93,9 @@ df_oda <- df_oda |>
          )
 
 
-df_oda |> 
-  mutate_if(is.character, factor) |> 
-  skimr::skim()
-
+# df_oda |> 
+#   mutate_if(is.character, factor) |> 
+#   skimr::skim()
 
 ```
 
@@ -141,8 +140,9 @@ Preprocessing steps for the predictor variable *title_desc*:
 
 Other preprocessing steps:
 
+-   Remember: All steps are executed on the training set, but steps with `skip = TRUE` will be ignored when `bake()` is invoked (under the hood in the model). We should therefore isolate any steps that involve the outcome and/or use the `skip = TRUE` argument. For example, see the separate steps and the use of skip() when converting the character variables to factors below using `step_string2factor()`.
 -   We normalize all the numeric predictors as this is required in some models.
--   We convert all character variables to factors. Both output and predictor variables. This is needed for some preprocessing steps.
+-   We convert all character variables to factors. Both output and predictor variables. This is a good habit, but not necessary for this model workflow. Remember to isolate any steps that involves the outcome variable. Therefore do this step separately for the predictors and the outcome variable. We also specify skip=TRUE for preprosessing on the outcome variable to ignore this step when bake() is invoked.
 -   The variables *agreement_partner* and *implementing_partner* have a lot of factor levels. We collapse the less used partners in an *other*-level and specify a treshold for this level so that we keep only around 200 levels (partners).
 -   We convert all factor or character variables to binary numeric variables (dummy variables).
 -   We transform all the nominal predictors to factors by creating dummy variables. Also we specify that unseen factor levels will be assign with a new value. Also we deal with missing (unknown) data, and we remove factor levels with zero variance.
@@ -159,7 +159,8 @@ oda_rec <- recipe(mitigation ~ ., data = oda_train) |>
   step_tokenfilter(title_desc, max_tokens = 1e3, min_times = 10) |>
   step_tfidf(title_desc) |>
   step_normalize(all_numeric_predictors()) |>
-  step_string2factor(all_nominal()) |> 
+  step_string2factor(all_nominal_predictors()) |>
+  step_string2factor(mitigation, skip = TRUE) |>
   step_other(agreement_partner, implementing_partner, threshold = 0.001) |> 
   step_novel(all_nominal_predictors()) |>
   step_unknown(all_nominal_predictors()) |>
@@ -167,7 +168,7 @@ oda_rec <- recipe(mitigation ~ ., data = oda_train) |>
   step_zv(all_predictors()) |>
   step_smote(mitigation)
 
-# oda_rec
+#oda_rec
 
 ```
 
@@ -177,12 +178,14 @@ Let's have a look at the training data after these preprocessing steps. The `rec
 #| label: baked
 
 # df_train_baked <- prep(oda_rec) |> bake(new_data = NULL)
-
-#glimpse(df_train_baked)
+# 
+# glimpse(df_train_baked)
 
 ```
 
-Let's create a model specification for the model(s) we want to try. We are specifying a random forest model.
+Let's create a model specification for the model(s) we want to try. We are specifying a a) random forest model withouth hyperparameter tuning, and b) random forest model with hyperparameter tuning using a tuning grid.
+
+In the rest of the document both of these models are included in the code, but only the random forest model workflow with hyperparameter tuning is extracted and saved as the best final fitted model workflow.
 
 ```{r}
 #| label: model-specs
@@ -192,8 +195,8 @@ Let's create a model specification for the model(s) we want to try. We are speci
 #   set_mode("classification") |>
 #   set_engine("ranger")
 
-# Random forest (tune hyperparameters)
-rf_spec_tune <- 
+# Random forest (with hyperparameter tuning)
+rf_spec_tune <-
   rand_forest(trees = 500,
               mtry = tune(),
               min_n = tune()
@@ -230,7 +233,7 @@ We fit the model workflow (preprocessing and model) on the training set using re
 #| label: resampling-results
 
 # Fit a random forest model (without tuning hyperparameters)
-#
+
 # doParallel::registerDoParallel()
 # 
 # set.seed(1)
@@ -248,13 +251,13 @@ start_time <- Sys.time()
 doParallel::registerDoParallel()
 
 set.seed(1)
-rf_tune_res <- 
+rf_tune_res <-
   tune_grid(
     rf_wf_tune,
     resamples = oda_folds,
     metrics = metric_set(accuracy, recall, precision),
     control = control_resamples(save_pred = TRUE),
-    grid = 2
+    grid = 8
     )
 
 end_time <- Sys.time()
@@ -263,7 +266,7 @@ time <- end_time - start_time
 
 ## Evaluate performance
 
-How did the model perform? Let's have a look at the resampling performance metrics. We can visualize these results using a confusion matrix.
+How did the model perform? Let's have a look at the resampling performance metrics. We select the model with the best hyperparameters.
 
 ```{r}
 #| label: resampling-metrics
@@ -272,10 +275,10 @@ How did the model perform? Let's have a look at the resampling performance metri
 
 # rf_res_metrics <- collect_metrics(rf_res)
 # 
-# rf_res_truefalse <- rf_res |> 
+# rf_res_truefalse <- rf_res |>
 #   conf_mat_resampled(tidy = FALSE)
 # 
-# rf_res_autoplot <- rf_res_truefalse |> 
+# rf_res_autoplot <- rf_res_truefalse |>
 #   autoplot()
 
 # Random forest (with hyperparameter tuning)
@@ -291,44 +294,43 @@ Finally, let's make a final workflow, and then fit and evaluate the model one la
 ```{r}
 #| label: final-model
 
-# Fit final model
+# Fit final model (without tuning hyperparameters)
 # final_res <- last_fit(
 #   rf_wf,
 #   split = oda_split,
 #   metrics = metric_set(accuracy, recall, precision, roc_auc, sens, spec)
-#)
+# )
 # 
 # collect_metrics(final_res) # Metrics evaluated on the testing data. No sign of overfitting.
 # 
-# final_res_autoplot <- collect_predictions(final_res) |> 
-#   conf_mat(mitigation, .pred_class) |> 
+# final_res_autoplot <- collect_predictions(final_res) |>
+#   conf_mat(mitigation, .pred_class) |>
 #   autoplot()
 
-# Fit final model with best tuning parameters
+# Fit final model with the best tuning hyperparameters
 final_rf <- finalize_model(
   rf_spec_tune,
   best_accuracy
 )
 
-final_wf <- workflow() |> 
-  add_recipe(oda_rec) |> 
+final_wf <- workflow() |>
+  add_recipe(oda_rec) |>
   add_model(final_rf)
 
-final_res <- final_wf |> 
+final_res <- final_wf |>
   last_fit(oda_split)
 
+# Model performance on new data
 final_res |>  collect_metrics()
 
-p_final_res <- final_res |> 
+p_final_res <- final_res |>
   collect_predictions() |>
-  conf_mat(mitigation, .pred_class) |> 
+  conf_mat(mitigation, .pred_class) |>
   autoplot()
 
 ```
 
 The performance metrics from the test set indicate that we did not overfit during the training procedure.
-
-<!-- ![](figs/p_final_res.png){width="700"} -->
 
 ## Make predictions using the workflow
 
@@ -336,13 +338,6 @@ The final_res object contains a finalized, fitted **workflow** that can be used 
 
 ```{r}
 #| label: extract-workflow
-
-# Extract final fitted workflow used to train the algoritm
-#final_workflow <- extract_workflow(final_res)
-
-# Predict on testing data
-#augment(final_workflow, new_data = oda_test[1,])
-
 
 # Extract final fitted workflow used to train the algoritm
 final_wf <- extract_workflow(final_res)
@@ -353,9 +348,9 @@ augment(final_wf, new_data = oda_test[1,])
 
 We can save this fitted `final_wf()` object to use later with new data.
 
-```{r save fitted workflow}
+```{r save final workflow}
 
-#readr::write_rds(final_workflow, "final_workflow11062020.rds")
+#readr::write_rds(final_wf, "final_wf.rds")
 
 ```
 
@@ -366,14 +361,14 @@ We can save this fitted `final_wf()` object to use later with new data.
 
 # library(vetiver)
 # 
-# v <- vetiver_model(final_fitted, "Climate change mitigation")
+# v <- vetiver_model(final_wf, "A model to identify development aid agreements targeting climate change mitigation")
 # 
 # v
 # 
 # library(plumber)
 # 
-# pr() |> 
-#   vetiver_api(v) |> 
+# pr() |>
+#   vetiver_api(v) |>
 #   pr_run()
 
 ```
