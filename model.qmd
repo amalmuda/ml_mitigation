@@ -16,14 +16,16 @@ execute:
 
 We build a model to identify development agreements supporting developing countries in reducing greenhouse gas emissions. The model is trained using supervised machine learning.
 
-## Load packages
+## Project dependencies
 
-The `renv` package is used for reproducibility by bringing project-local R dependency management to the project. Call `renv::restore()` to restore the projects package dependencies.
+The `renv` package is used for reproducibility by bringing project-local R dependency management to the project. Call `renv::restore()` to restore the projects dependencies (R version and package version).
 
 Then, lets load the packages.
 
 ```{r}
 #| label: load-packages
+
+#renv::restore()
 
 library(tidyverse)
 library(tidymodels)
