@@ -205,7 +205,7 @@ In the rest of the document both of these models are included in the code, but o
 
 # Random forest (with hyperparameter tuning)
 rf_spec_tune <-
-  rand_forest(trees = 1,
+  rand_forest(trees = 500,
               mtry = tune(),
               min_n = tune()
               ) |>
@@ -265,7 +265,7 @@ rf_tune_res <-
     resamples = oda_folds,
     metrics = metric_set(accuracy, recall, precision),
     control = control_resamples(save_pred = TRUE),
-    grid = 2
+    grid = 8
     )
 
 end_time <- Sys.time()
