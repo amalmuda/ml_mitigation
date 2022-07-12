@@ -12,11 +12,15 @@ execute:
   enabled: false
 ---
 
-We build a model to identify development agreements supporting developing countries in reducing greenhouse gas emissions. The model is built using supervised machine learning.
+<!-- To execute code chunks when rendering this document, switch to enabled: true in yaml -->
 
-## Load packages and data
+We build a model to identify development agreements supporting developing countries in reducing greenhouse gas emissions. The model is trained using supervised machine learning.
 
-Lets start by loading the packages.
+## Load packages
+
+The `renv` package is used for reproducibility by bringing project-local R dependency management to the project. Call `renv::restore()` to restore the projects package dependencies.
+
+Then, lets load the packages.
 
 ```{r}
 #| label: load-packages
@@ -30,12 +34,16 @@ library(textrecipes)
 library(themis)
 library(ranger)
 library(doParallel)
-library(noradstats)
 library(here)
 library(janitor)
 library(knitr)
+library(vetiver)
+library(plumber)
+library(renv)
 
 ```
+
+## Load data
 
 Norwegian development aid statistics (microdata) is publicly available to download [aidresults.no/microdata](https://resultater.norad.no/microdata). We select last five years (2013-2017). These data can also be downloaded by using [this link](https://resultater.norad.no/api/microdata?from_year=2011&to_year=2017&main_region_code=&country_iso_code=&agreement_partner_group_sid=&agreement_partner_sid=&target_area_code=&dac_main_sector_code=&dac_sub_sector_code=&chapter_code=&format=csv&language=en). The csv file is saved in the the *data* folder in the project directory and named *Norad-Norwegian_development_assistance.csv*.
 
@@ -197,7 +205,7 @@ In the rest of the document both of these models are included in the code, but o
 
 # Random forest (with hyperparameter tuning)
 rf_spec_tune <-
-  rand_forest(trees = 500,
+  rand_forest(trees = 1,
               mtry = tune(),
               min_n = tune()
               ) |>
@@ -257,7 +265,7 @@ rf_tune_res <-
     resamples = oda_folds,
     metrics = metric_set(accuracy, recall, precision),
     control = control_resamples(save_pred = TRUE),
-    grid = 8
+    grid = 2
     )
 
 end_time <- Sys.time()
@@ -349,6 +357,7 @@ augment(final_wf, new_data = oda_test[1,])
 We can save this fitted `final_wf()` object to use later with new data.
 
 ```{r save final workflow}
+#| label: save-workflow
 
 #readr::write_rds(final_wf, "final_wf.rds")
 
@@ -356,19 +365,17 @@ We can save this fitted `final_wf()` object to use later with new data.
 
 ## Deploy model workflow
 
-```{r}
-#| label: deploy
+Deploy model workflow using packages `vetiver` and `plumber`.
 
-# library(vetiver)
-# 
-# v <- vetiver_model(final_wf, "A model to identify development aid agreements targeting climate change mitigation")
+```{r}
+#| label: deploy-workflow
+
+# v <- vetiver::vetiver_model(final_wf, "A model to identify development aid agreements targeting climate change mitigation")
 # 
 # v
 # 
-# library(plumber)
-# 
-# pr() |>
-#   vetiver_api(v) |>
-#   pr_run()
+# plumber::pr() |>
+#   vetiver::vetiver_api(v) |>
+#   plumber::pr_run()
 
 ```
